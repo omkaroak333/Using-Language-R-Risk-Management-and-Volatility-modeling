@@ -1,0 +1,530 @@
+---
+author: Omkar Kulkarni
+title: "Assignment 7 Risk Management"
+output: html_document
+---
+
+
+```{r include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message=FALSE)
+```
+
+
+
+
+
+
+
+```{r include=FALSE}
+# install.packages("knitr")
+# install.packages("haven")
+# install.packages("dplyr")
+# install.packages("lubridate")
+# install.packages("PerformanceAnalytics")
+# install.packages("ggplot2")
+# install.packages("fGarch")
+# install.packages("sqldf")
+
+library(haven)
+library(dplyr)
+library(lubridate)
+library(PerformanceAnalytics)
+library(ggplot2)
+library(fGarch)
+library(sqldf)
+library(knitr)
+
+```
+
+
+```{r}
+dsfa <- read.csv("C:\\Users\\TRANSFORMER\\Desktop\\Favorites\\Downloads\\dsf_a.csv")
+
+dsf <- dsfa[order(dsfa$PERMNO),]
+
+```
+
+
+
+```{r}
+
+
+#Setting seed and finding a random year between 1980 and 2010
+set.seed(903467583)
+startingYear = floor(runif(1,min=1980,max = 2010))
+
+#Subsetting data for the starting year
+dsf_startingYear <- dsf[which(year(dsf$DATE)==startingYear), ]
+
+#Getting list of 100 random firms
+set.seed(903467583)
+lstPERMNO <- sample(unique(dsf_startingYear$PERMNO),100)
+
+#Subsetting six years of data based on the starting year obtained from sampling
+masterdata_6_years <- dsf[ which(year(dsf$DATE)>=startingYear & year(dsf$DATE) <= (startingYear+6) & dsf$PERMNO %in% lstPERMNO), ]
+
+#Subsetting data from 2000 to 2010
+masterdata_10_years <- dsf[ which(year(dsf$DATE)>=2000 & year(dsf$DATE) <= 2010 & dsf$PERMNO %in% lstPERMNO), ]
+
+#Finding 1 random PERMNO
+set.seed(903467583)
+tempPERMNO <- sample(unique(dsf_startingYear$PERMNO),1)
+
+#Subsetting data for the above sampled PERMNO
+temp_masterdata_6_years <- dsf[ which(year(dsf$DATE)>=startingYear & year(dsf$DATE) <= (startingYear+6) & dsf$PERMNO == tempPERMNO), ]
+
+#Calculating VaR and ES by functions
+VAR_by_function = VaR(temp_masterdata_6_years$RET,p = 0.95, method = "historical")
+ES_by_function = ES(temp_masterdata_6_years$RET,p = 0.95, method = "historical")
+
+#Calculating VaR and ES through quantile and mean functions
+VAR_by_quantile = quantile(temp_masterdata_6_years$RET,probs = 0.05, na.rm = TRUE)
+ES_by_mean = mean(temp_masterdata_6_years[which(temp_masterdata_6_years$RET <= VAR_by_quantile),]$RET, na.rm = TRUE)
+
+#Initializing the initial Investment
+initialInvestment <- 1000000
+
+```
+
+```{r}
+
+#Task 1
+
+#Calculating the VaR and ES for 100 PERMNOs in the six years
+task1Data <- masterdata_6_years %>%
+  group_by(PERMNO) %>%
+  summarize(VaR = VaR(RET,p = 0.95, method = "historical"),
+            VaR_Dollar_Value = VaR * initialInvestment,
+            ES = ES(RET,p = 0.95, method = "historical"),
+            ES_DOllar_Value = ES * initialInvestment)
+
+#Calculating VaR and ES for portfolio as a whole in the six years
+
+portfolioData_6_years <- masterdata_6_years %>%
+  group_by(DATE) %>%
+  summarize(Return = mean(RET,na.rm = TRUE))
+
+Portfolio_VaR_6_years = VaR(portfolioData_6_years$Return,p=0.95,method = "historical")
+Portfolio_VaR_Dollar_Value_6_years = Portfolio_VaR_6_years * 100 * initialInvestment
+Portfolio_ES_6_years = ES(portfolioData_6_years$Return,p=0.95,method = "historical")
+Portfolio_ES_Dollar_Value_6_years = Portfolio_ES_6_years * 100 * initialInvestment
+
+#Task 2
+
+#Calculating the VaR and ES for PERMNOs between 2000 and 2010
+task2Data <- masterdata_10_years %>%
+  group_by(PERMNO) %>%
+  summarize(VaR = VaR(RET,p = 0.95, method = "historical"),
+            VaR_Dollar_Value = VaR * initialInvestment,
+            ES = ES(RET,p = 0.95, method = "historical"),
+            ES_DOllar_Value = ES * initialInvestment)
+
+#Calculating VaR and ES for portfolio as a whole between 2000 and 2010
+
+portfolioData_10_years <- masterdata_10_years %>%
+  group_by(DATE) %>%
+  summarize(Return = mean(RET,na.rm = TRUE))
+
+Portfolio_VaR_10_years = VaR(portfolioData_10_years$Return,p=0.95,method = "historical")
+Portfolio_VaR_Dollar_Value_10_years = Portfolio_VaR_10_years * 46 * initialInvestment
+Portfolio_ES_10_years = ES(portfolioData_10_years$Return,p=0.95,method = "historical")
+Portfolio_ES_Dollar_Value_10_years = Portfolio_ES_10_years * 46 * initialInvestment
+
+#Task 3
+
+#Initializing lambda
+lambda <- 0.94
+
+#Calculating Initial Variances for the firms
+initial_variance_data_annualized <- masterdata_6_years %>%
+  group_by(PERMNO) %>%
+  summarize(Variance_Annualized = var(RET, na.rm = TRUE) * 252)
+
+#Initializing blank data frame
+variances_data <- data.frame(PERMNO=NULL, DATE = NULL, RET = NULL, Variance = NULL, stringsAsFactors = FALSE)
+
+#Calculating variances for all firms using the RiskMetrics model to calculate variance
+for(tempPERMNO in lstPERMNO){
+  
+  tempData <- masterdata_10_years[ which(masterdata_10_years$PERMNO==tempPERMNO), ]
+  tempData <- tempData[complete.cases(tempData),]
+  if(nrow(tempData) > 0)
+  {
+    tempData$Variance <- NA
+    tempData$Variance[1] = initial_variance_data_annualized[ which(initial_variance_data_annualized$PERMNO==tempPERMNO), ]$Variance_Annualized
+    
+    for(i in 2:nrow(tempData)){
+      tempData$Variance[i] = (lambda * tempData$Variance[i-1]/252 + (1 - lambda) * tempData$RET[i-1]**2) *252
+    }
+    
+    temp_variance_data <- data.frame(PERMNO = c(tempPERMNO) , DATE = tempData$DATE, RET = tempData$RET, Variance = tempData$Variance, stringsAsFactors = FALSE)
+    
+    variances_data <- rbind(variances_data,temp_variance_data)
+    
+    }
+  
+  
+}
+
+
+#Task 4
+
+#Initializing blank data frame
+garch_coeff_data <- data.frame(PERMNO = NULL, Alpha = NULL, Beta = NULL, Omega = NULL, stringsAsFactors = FALSE)
+
+#Calculating alpha, beta and omega for all 100 PERMNOs
+for(tempPERMNO in lstPERMNO){
+  
+  tempData <- masterdata_6_years[ which(masterdata_6_years$PERMNO==tempPERMNO), ]
+  tempData <- tempData[complete.cases(tempData),]
+  if(nrow(tempData) > 0)
+  {
+    garch_model <- garchFit(formula = ~ garch(1, 1), data = tempData$RET)
+    alpha <- coef(garch_model)[3]
+    beta <- coef(garch_model)[4]
+    omega <- coef(garch_model)[2]
+    
+    temp_coeff_data <- data.frame(PERMNO = c(tempPERMNO), Alpha = c(alpha), Beta = c(beta), Omega = c(omega), stringsAsFactors = FALSE)
+    
+    garch_coeff_data <- rbind(garch_coeff_data,temp_coeff_data)
+  }
+  
+}
+
+rownames(garch_coeff_data) <- NULL
+
+
+#Task 5
+
+#Initializing blank data frame
+garch_variances_data <- data.frame(PERMNO=NULL, DATE = NULL, RET = NULL, garchVariance = NULL, stringsAsFactors = FALSE)
+
+#Calculating variances for all firms using the GARCH model to calculate variance
+for(tempPERMNO in lstPERMNO){
+  
+  tempData <- masterdata_10_years[ which(masterdata_10_years$PERMNO==tempPERMNO), ]
+  tempData <- tempData[complete.cases(tempData),]
+  if(nrow(tempData) >0)
+  {
+    
+    tempData$garchVariance <- NA
+    tempData$garchVariance[1] = initial_variance_data_annualized[ which(initial_variance_data_annualized$PERMNO==tempPERMNO), ]$Variance_Annualized
+    
+    tempAlpha <- garch_coeff_data[ which(garch_coeff_data$PERMNO==tempPERMNO), ]$Alpha
+    tempBeta <- garch_coeff_data[ which(garch_coeff_data$PERMNO==tempPERMNO), ]$Beta
+    tempOmega <- garch_coeff_data[ which(garch_coeff_data$PERMNO==tempPERMNO), ]$Omega
+    
+    for(i in 2:nrow(tempData)){
+      tempData$garchVariance[i] = (tempOmega + tempBeta * tempData$garchVariance[i-1]/252 + tempAlpha * tempData$RET[i-1]**2) * 252
+    }
+    
+    temp_garch_variance_data <- data.frame(PERMNO = c(tempPERMNO) , DATE = tempData$DATE, RET = tempData$RET, garchVariance = tempData$garchVariance, stringsAsFactors = FALSE)
+    
+    garch_variances_data <- rbind(garch_variances_data,temp_garch_variance_data)
+    
+    
+  }
+  
+  
+}
+
+```
+
+Random Starting Year Generated: 1990  
+
+```{r echo=FALSE, warning=FALSE}
+
+print(paste("VaR generated using the VaR function:",VAR_by_function))
+print(paste("VaR generated using the quantile function:",VAR_by_quantile))
+print(paste("ES generated using the ES function:",ES_by_function))
+print(paste("ES generated using the mean function:",ES_by_mean))
+
+```
+
+
+
+#Task 1 - VaR and Expected Shortfall for stocks between 1990 to 1996
+
+##Return Distribution
+
+```{r echo=FALSE, fig.height=4, fig.width=8, warning=FALSE}
+
+qplot(masterdata_6_years$RET, geom="histogram", binwidth = 0.005, main = "Return Distribution : 1990-1996", 
+      xlab = "Return", ylab = "Frequency", fill=I("green"), col=I("green"), alpha=I(.2)) + xlim(-0.25, 0.25) +
+  stat_function(fun = function(x, mean, sd, n, bw){dnorm(x = x, mean = mean, sd = sd) * n * bw}, 
+                args = c(mean = mean(masterdata_6_years$RET), sd = sd(masterdata_6_years$RET), n = nrow(masterdata_6_years), bw = 0.005))
+
+```
+
+
+
+##Descriptive Statistics of Returns
+
+```{r echo=FALSE, warning=FALSE}
+
+summary_masterdata_6_years = summary(masterdata_6_years$RET)
+print("Summary of Returns")
+print(summary_masterdata_6_years)
+
+
+```
+
+##Portfolio Return Distribution
+
+```{r echo=FALSE, fig.height=4, fig.width=8, warning=FALSE}
+
+qplot(portfolioData_6_years$Return, geom="histogram", binwidth = 0.005, main = "Return Distribution : 1990-1996", 
+      xlab = "Return", ylab = "Frequency", fill=I("green"), col=I("green"), alpha=I(.2)) + xlim(-0.25, 0.25) +
+  stat_function(fun = function(x, mean, sd, n, bw){dnorm(x = x, mean = mean, sd = sd) * n * bw}, 
+                args = c(mean = mean(portfolioData_6_years$Return), sd = sd(portfolioData_6_years$Return), n = nrow(portfolioData_6_years), bw = 0.005))
+
+```
+
+
+##VaR and Expected Shortfall
+
+```{r echo=FALSE, warning=FALSE}
+
+
+print(paste("VaR of the portfolio as a whole:",Portfolio_VaR_6_years))
+print(paste("$VaR of the portfolio as a whole:",Portfolio_VaR_Dollar_Value_6_years))
+print(paste("ES of the portfolio as a whole:",Portfolio_ES_6_years))
+print(paste("$ES of the portfolio as a whole:",Portfolio_ES_Dollar_Value_6_years))
+
+```
+
+##VaR and Expected Shortfall Distribution
+
+```{r echo=FALSE, fig.height=4, fig.width=8, warning=FALSE}
+
+qplot(task1Data$VaR, geom="histogram", binwidth = 0.0025, main = "Value At Risk Distribution : 1990-1996", 
+      xlab = "Value At Risk", ylab = "Frequency", fill=I("green"), col=I("green"), alpha=I(.2)) + xlim(-0.25, 0.25) +
+  stat_function(fun = function(x, mean, sd, n, bw){dnorm(x = x, mean = mean, sd = sd) * n * bw}, 
+                args = c(mean = mean(task1Data$VaR), sd = sd(task1Data$VaR), n = nrow(task1Data), bw = 0.0025))
+
+qplot(task1Data$ES, geom="histogram", binwidth = 0.0025, main = "Histogram for Expected Shortfall : 1990-1996", 
+      xlab = "Expected Shortfall", ylab = "Frequency", fill=I("green"), col=I("green"), alpha=I(.2)) + xlim(-0.25, 0.25) +
+  stat_function(fun = function(x, mean, sd, n, bw){dnorm(x = x, mean = mean, sd = sd) * n * bw}, 
+                args = c(mean = mean(task1Data$ES), sd = sd(task1Data$ES), n = nrow(task1Data), bw = 0.0025))
+
+```
+
+
+##Descriptive Statistics
+
+```{r echo=FALSE, warning=FALSE}
+
+summary_task1Data = summary(task1Data)
+print(summary_task1Data)
+
+```
+
+
+#Task 2 - VaR and Expected Shortfall for stocks between 2000 to 2010
+
+##Return Distribution
+
+```{r echo=FALSE, fig.height=4, fig.width=8, warning=FALSE}
+
+qplot(masterdata_10_years$RET, geom="histogram", binwidth = 0.005, main = "Return Distribution : 2000-2010", 
+      xlab = "Return", ylab = "Frequency", fill=I("green"), col=I("green"), alpha=I(.2)) + xlim(-0.25, 0.25) +
+  stat_function(fun = function(x, mean, sd, n, bw){dnorm(x = x, mean = mean, sd = sd) * n * bw}, 
+                args = c(mean = mean(masterdata_10_years$RET), sd = sd(masterdata_10_years$RET), n = nrow(masterdata_10_years), bw = 0.005))
+
+```
+
+
+
+##Descriptive Statistics of Returns
+
+```{r echo=FALSE, warning=FALSE}
+
+summary_masterdata_10_years = summary(masterdata_10_years$RET)
+print("Summary of Returns")
+print(summary_masterdata_10_years)
+
+
+```
+
+##Portfolio Return Distribution
+
+```{r echo=FALSE, fig.height=4, fig.width=8, warning=FALSE}
+
+qplot(portfolioData_10_years$Return, geom="histogram", binwidth = 0.005, main = "Return Distribution : 1990-1996", 
+      xlab = "Return", ylab = "Frequency", fill=I("green"), col=I("green"), alpha=I(.2)) + xlim(-0.25, 0.25) +
+  stat_function(fun = function(x, mean, sd, n, bw){dnorm(x = x, mean = mean, sd = sd) * n * bw}, 
+                args = c(mean = mean(portfolioData_10_years$Return), sd = sd(portfolioData_10_years$Return), n = nrow(portfolioData_10_years), bw = 0.005))
+
+```
+
+
+##VaR and Expected Shortfall
+
+```{r echo=FALSE, warning=FALSE}
+
+
+print(paste("VaR of the portfolio as a whole:",Portfolio_VaR_10_years))
+print(paste("$VaR of the portfolio as a whole:",Portfolio_VaR_Dollar_Value_10_years))
+print(paste("ES of the portfolio as a whole:",Portfolio_ES_10_years))
+print(paste("$ES of the portfolio as a whole:",Portfolio_ES_Dollar_Value_10_years))
+
+```
+
+##VaR and Expected Shortfall Distribution
+
+```{r echo=FALSE, fig.height=4, fig.width=8, warning=FALSE}
+
+qplot(task2Data$VaR, geom="histogram", binwidth = 0.0025, main = "Value At Risk Distribution : 2000-2010", 
+      xlab = "Value At Risk", ylab = "Frequency", fill=I("green"), col=I("green"), alpha=I(.2)) + xlim(-0.25, 0.25) +
+  stat_function(fun = function(x, mean, sd, n, bw){dnorm(x = x, mean = mean, sd = sd) * n * bw}, 
+                args = c(mean = mean(task2Data$VaR), sd = sd(task2Data$VaR), n = nrow(task2Data), bw = 0.0025))
+
+qplot(task2Data$ES, geom="histogram", binwidth = 0.0025, main = "Histogram for Expected Shortfall : 2000-2010", 
+      xlab = "Expected Shortfall", ylab = "Frequency", fill=I("green"), col=I("green"), alpha=I(.2)) + xlim(-0.25, 0.25) +
+  stat_function(fun = function(x, mean, sd, n, bw){dnorm(x = x, mean = mean, sd = sd) * n * bw}, 
+                args = c(mean = mean(task2Data$ES), sd = sd(task2Data$ES), n = nrow(task2Data), bw = 0.0025))
+
+```
+
+
+##Descriptive Statistics
+
+```{r echo=FALSE, warning=FALSE}
+
+summary_task2Data = summary(task2Data)
+print(summary_task2Data)
+
+```
+
+
+
+\newpage
+
+#Task 3 - Simple Risk Metrics Model  
+
+
+##Variance plot for PERMNO 52090 between 2000 to 2010  
+
+Folowing is the plot generated for PERMNO 52090 whose variances have been calculated using JP Morgan's RiskMetrics variance model: 
+
+```{r echo=FALSE, fig.height=4, fig.width=8, warning=FALSE}
+
+
+  
+  temp_variance_data <- variances_data[ which(variances_data$PERMNO==52090), ]
+    
+
+  temp_variance_data <- temp_variance_data%>%
+    mutate(DATE= as.Date(temp_variance_data$DATE,"%Y-%m-%d"))
+  
+  plot = ggplot(data = temp_variance_data, aes(x=DATE,y=Variance, group =1)) +
+      geom_line(color='steelblue') +
+      ylab(label="Variance") +
+      xlab(label="DATE")+
+    ggtitle(paste("Variance of 52090 over time", sep=" "))+
+    scale_x_date(date_breaks = "1 year",date_labels =  "%Y")
+  
+  print(plot)
+  
+
+```
+
+
+#Task 4 & 5 - GARCH Model 
+
+##Task 4 - Alphas and Betas for 100 PERMNOs
+
+```{r echo=FALSE, warning=FALSE}
+
+print("GARCH Coefficients - Alpha, Beta, and Omega ")
+
+```
+
+\newpage
+
+##Task 5 - GARCH Variance Plot for PERMNO 52090 between 2000 to 2010  
+
+Folowing is the plot generated for the same firm whose variances have been calculated using GARCH(1,1) model: 
+
+```{r echo=FALSE, fig.height=4, fig.width=8, warning=FALSE}
+
+
+  
+  temp_garch_variance_data <- garch_variances_data[ which(garch_variances_data$PERMNO==52090), ]
+
+  temp_garch_variance_data <- temp_garch_variance_data%>%
+    mutate(DATE= as.Date(temp_garch_variance_data$DATE,"%Y-%m-%d"))
+  
+  plot = ggplot(data = temp_garch_variance_data, aes(x=DATE,y=garchVariance, group =1)) +
+      geom_line(color='steelblue') +
+      ylab(label="Variance") +
+      xlab(label="DATE")+
+    ggtitle(paste("GARCH Variance of 52090 over time", sep=" "))+
+    scale_x_date(date_breaks = "1 year",date_labels =  "%Y")
+  
+  print(plot)
+
+
+```
+
+##Analysis  
+
+We can see that both models to estimate volatility give us similar graphs for the same firm. In both graphs, we see a huge spike in volatility after 2008 which could be explained by the financial crisis. 
+
+
+\newpage
+
+#Appendix
+
+##Variance plots for all PERMNOs between 2000 to 2010
+
+```{r echo=FALSE, fig.height=4, fig.width=8, warning=FALSE}
+
+lstPERMNO <- unique(variances_data$PERMNO)
+
+for(tempPERMNO in lstPERMNO){
+  
+  temp_variance_data <- variances_data[ which(variances_data$PERMNO==tempPERMNO), ]
+  
+  temp_variance_data <- temp_variance_data%>%
+    mutate(DATE= as.Date(temp_variance_data$DATE,"%Y-%m-%d"))
+  
+  
+  plot = ggplot(temp_variance_data, aes(x=DATE, color = 'red')) +
+      geom_line(aes(y=Variance)) +
+      ylab(label="Variance") +
+      xlab(label="DATE")+
+    ggtitle(paste("Variance of",tempPERMNO,"over time", sep=" "))
+  
+  print(plot)
+  
+}
+
+```
+
+##GARCH Variance plots for all PERMNOs between 2000 to 2010
+
+```{r echo=FALSE, fig.height=4, fig.width=8, warning=FALSE}
+
+lstPERMNO <- unique(garch_variances_data$PERMNO)
+
+for(tempPERMNO in lstPERMNO){
+  
+  temp_garch_variance_data <- garch_variances_data[ which(garch_variances_data$PERMNO==tempPERMNO), ]
+  
+  temp_garch_variance_data <- temp_garch_variance_data%>%
+    mutate(DATE= as.Date(temp_garch_variance_data$DATE,"%Y-%m-%d"))
+  
+  
+  plot = ggplot(temp_garch_variance_data, aes(x=DATE)) +
+      geom_line(aes(y=garchVariance), color = 'darkgreen') +
+      ylab(label="Variance") +
+      xlab(label="DATE")+
+    ggtitle(paste("GARCH Variance of",tempPERMNO,"over time", sep=" "))
+  
+  print(plot)
+  
+}
+
+```
